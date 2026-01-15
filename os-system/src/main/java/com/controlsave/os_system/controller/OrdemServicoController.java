@@ -1,68 +1,102 @@
 package com.controlsave.os_system.controller;
 
 import com.controlsave.os_system.model.OrdemServico;
+import com.controlsave.os_system.model.Transacao; // ✨ Import necessário
 import com.controlsave.os_system.repository.OrdemServicoRepository;
+import com.controlsave.os_system.repository.TransacaoRepository; // ✨ Import necessário
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
-@RestController // ✅ Diz ao Spring que isso responde com JSON
-@RequestMapping("/api/os") // ✅ Define a URL base: http://localhost:8080/api/os
+@RestController
+@RequestMapping("/api/os")
+// ✅ Libera o acesso para o React (Importante para evitar erro de CORS)
+@CrossOrigin(origins = "http://localhost:5173") 
 public class OrdemServicoController {
 
     @Autowired
     private OrdemServicoRepository repository;
 
+    @Autowired
+    private TransacaoRepository transacaoRepository; // ✨ Injeção do módulo Financeiro
+
     // ==========================================================
-    // 🔍 1. LISTAR TODAS (GET /api/os)
+    // 🔍 1. LISTAR TODAS
     // ==========================================================
     @GetMapping
     public List<OrdemServico> listarTodos() {
-        // ✨ Dica: Se quiser ordenar por data, pode usar repository.findAll(Sort.by(...))
         return repository.findAll();
     }
 
     // ==========================================================
-    // ➕ 2. CRIAR NOVA OS (POST /api/os)
+    // ➕ 2. CRIAR NOVA OS
     // ==========================================================
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED) // Retorna código 201 (Sucesso)
+    @ResponseStatus(HttpStatus.CREATED)
     public OrdemServico criar(@RequestBody OrdemServico ordemServico) {
-        // O @RequestBody pega o JSON enviado pelo React e transforma em Objeto Java
         return repository.save(ordemServico);
     }
 
     // ==========================================================
-    // 🆔 3. BUSCAR UMA (GET /api/os/{id})
+    // 🆔 3. BUSCAR POR ID
     // ==========================================================
     @GetMapping("/{id}")
     public ResponseEntity<OrdemServico> buscarPorId(@PathVariable Long id) {
         return repository.findById(id)
                 .map(record -> ResponseEntity.ok().body(record))
-                .orElse(ResponseEntity.notFound().build()); // Retorna 404 se não achar
+                .orElse(ResponseEntity.notFound().build());
     }
 
     // ==========================================================
-    // ✏️ 4. ATUALIZAR STATUS/DADOS (PUT /api/os/{id})
+    // ✏️ 4. ATUALIZAR (COM INTEGRAÇÃO FINANCEIRA)
     // ==========================================================
     @PutMapping("/{id}")
     public ResponseEntity<OrdemServico> atualizar(@PathVariable Long id, @RequestBody OrdemServico dadosNovos) {
         return repository.findById(id)
                 .map(record -> {
-                    // Atualiza apenas os campos permitidos
+                    // Atualiza dados básicos
                     record.setNomeCliente(dadosNovos.getNomeCliente());
                     record.setEquipamento(dadosNovos.getEquipamento());
                     record.setDefeitoRelatado(dadosNovos.getDefeitoRelatado());
-                    record.setStatus(dadosNovos.getStatus());
                     record.setLaudoTecnico(dadosNovos.getLaudoTecnico());
-                    record.setValorTotal(dadosNovos.getValorTotal());
-                    
-                    // Se estiver fechando a OS agora, marca a data
-                    if ("CONCLUIDO".equals(dadosNovos.getStatus()) && record.getDataFechamento() == null) {
-                       record.setDataFechamento(java.time.LocalDateTime.now());
+                    record.setValorTotal(dadosNovos.getValorTotal()); // Importante estar atualizado antes de faturar
+
+                    // Verifica mudança de Status
+                    String novoStatus = dadosNovos.getStatus();
+                    record.setStatus(novoStatus);
+
+                    // 📅 Se finalizou, marca a data de fechamento
+                    if (("CONCLUIDO".equalsIgnoreCase(novoStatus) || "ENTREGUE".equalsIgnoreCase(novoStatus)) 
+                            && record.getDataFechamento() == null) {
+                        record.setDataFechamento(LocalDateTime.now());
+                    }
+
+                    // 💰 LÓGICA FINANCEIRA AUTOMÁTICA
+                    // Se o status for CONCLUIDO ou ENTREGUE e ainda não tiver sido faturado:
+                    if (("CONCLUIDO".equalsIgnoreCase(novoStatus) || "ENTREGUE".equalsIgnoreCase(novoStatus))
+                            && !Boolean.TRUE.equals(record.getFaturado())) {
+                        
+                        // Só lança se tiver valor maior que zero
+                        if (record.getValorTotal() != null && record.getValorTotal().doubleValue() > 0) {
+                            
+                            Transacao receita = new Transacao();
+                            receita.setDescricao("Receita OS #" + record.getId() + " - " + record.getNomeCliente());
+                            receita.setValor(record.getValorTotal().doubleValue());
+                            receita.setTipo("RECEITA");
+                            receita.setCategoria("Serviço Técnico"); // Categoria automática
+                            receita.setData(LocalDate.now());
+
+                            // Salva no financeiro
+                            transacaoRepository.save(receita);
+                            
+                            // 🔒 Trava a OS para não duplicar o dinheiro se editar depois
+                            record.setFaturado(true);
+                        }
                     }
 
                     OrdemServico atualizado = repository.save(record);

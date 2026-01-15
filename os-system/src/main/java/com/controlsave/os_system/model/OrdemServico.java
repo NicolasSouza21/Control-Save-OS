@@ -24,10 +24,10 @@ public class OrdemServico {
     // =================================================================
     @Column(nullable = false)
     private String nomeCliente;
-
     private String telefoneCliente;
     
     private String emailCliente;
+    private Boolean faturado = false;
 
     // =================================================================
     // 💻 DADOS DO EQUIPAMENTO
@@ -67,11 +67,8 @@ public class OrdemServico {
     // ✨ Automação: Roda antes de salvar no banco pela primeira vez
     @PrePersist
     public void prePersist() {
-        if (this.dataAbertura == null) {
-            this.dataAbertura = LocalDateTime.now();
-        }
-        if (this.status == null) {
-            this.status = "ABERTO";
-        }
+        if (this.dataAbertura == null) this.dataAbertura = LocalDateTime.now();
+        if (this.status == null) this.status = "ABERTO";
+        if (this.faturado == null) this.faturado = false; // ✨ Garante falso no início
     }
 }
